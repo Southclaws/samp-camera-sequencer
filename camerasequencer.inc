@@ -2,344 +2,461 @@
 
 
 	Southclaw's Camera Sequencer
-	
-		Version 2.7:
-			Easy file loaded data
-			Easy to create cameras
-			Edit data without recompiling script!
-			Full editor support added (Editor is now an FS)
-			Shift data array functions
-			More controls
-			Added a function to exit the camera sequence
-			Added a Loop parameter for PlayCameraMover
-			Added wait-time functionality
+		v3.0
 
 
 ==============================================================================*/
 
 
 #include <sscanf2>
+#include <YSI\y_iterate>
+
+#if !defined CAMSEQ_DEBUG
+	#define CAMSEQ_DEBUG (false)
+#endif
+
+#define MAX_CAMERAS					(128)	// Max cameras that can be loaded at once
+#define MAX_CAMNODE					(32)	// Max camera nodes that can be loaded for one camera
+#define MAX_CAMERA_FILENAME			(64)	// Length for file names in loading and saving
+#define INVALID_CAMERA_SEQUENCER_ID	(-1)
+
+#define DIR_CAMERAS					"camseq/"
+#define CAMERA_FILE					DIR_CAMERAS"%s.cam"
+
+#define DEFAULT_MOVETIME			(3000)
+#define DEFAULT_WAITTIME			(0)
+#define DEFAULT_MOVETYPE			(CAMERA_MOVE)
+
+#if CAMSEQ_DEBUG == true
+	#define camseq_debug(%0); printf(%0);
+#else
+	#define camseq_debug(%0);
+#endif
 
 
-#define MAX_CAMERAS			16  // Max cameras that can be loaded at once
-#define MAX_CAMNODE			16  // Max camera nodes that can be loaded for one camera
-#define MAX_CAMFILE_LEN		64  // Length for file names in loading and saving
-#define MAX_CAMDATA			9   // Amount data of cells in cam_Data
+/*==============================================================================
 
-#define CAMERA_FILE			"Cameras/%s.cam"
+	Setup
 
-#define DEFAULT_MOVETIME	3000
-#define DEFAULT_WAITTIME	0
-#define DEFAULT_MOVETYPE	CAMERA_MOVE
+==============================================================================*/
 
-enum ENUM_DATA_TYPES
+
+enum E_CAM_DATA
 {
-	p_CamID,
-	p_Node
-}
-enum CAM_DATA_ENUM
-{
-	Float:cam_cPosX,		// Position coords
-	Float:cam_cPosY,
-	Float:cam_cPosZ,
-	Float:cam_lPosX,		// Lookat coords
-	Float:cam_lPosY,
-	Float:cam_lPosZ,
-	cam_moveTime,			// Time in MS to move between each node
-	cam_waitTime,			// Time in MS to wait before moving
-	cam_moveType			// Camera move type (Cut or Move)
+			cam_totalNodes,
+			cam_isPaused,
+			cam_currentNode,
+			cam_isMoving // TODO: make this work
 }
 
+enum E_CAM_NODE_DATA
+{
+Float:		cam_posX,
+Float:		cam_posY,
+Float:		cam_posZ,
+Float:		cam_tarX,
+Float:		cam_tarY,
+Float:		cam_tarZ,
+			cam_moveTime,
+			cam_waitTime,
+			cam_moveType
+}
+
+
+static
+			cam_Data[MAX_CAMERAS][E_CAM_DATA],
+			cam_NodeData[MAX_CAMERAS][MAX_CAMNODE][E_CAM_NODE_DATA],
+			cam_NodeTimer[MAX_CAMERAS],
+Float:		cam_PausePos[MAX_CAMERAS][6],
+			cam_PlayerCurrentCamera[MAX_PLAYERS];
 
 new
-	camData[MAX_CAMERAS][MAX_CAMNODE][CAM_DATA_ENUM],
-	camFilename[MAX_CAMERAS][MAX_CAMFILE_LEN],
-	camNodeTimer[MAX_CAMERAS],		// For stopping the timer when the camera pauses
-	camMaxNodes[MAX_CAMERAS],		// Maximum nodes for this camera
-	bool:camIdUsed[MAX_CAMERAS],	// Determines whether the ID is used or not
-	bool:camPaused[MAX_CAMERAS],	// Determines whether the camera is paused
-	bool:camMoving[MAX_CAMERAS],	// True whem the camera moves from one node to another
-	gPlayerCamData[MAX_PLAYERS][ENUM_DATA_TYPES],
-	Float:camPausePos[MAX_CAMERAS][6];
+Iterator:	cam_Index<MAX_CAMERAS>;
 
-forward MoveCameraToNextNode(playerid, bool:editing, bool:tp, bool:loop);
-forward internal_OnCamMove(playerid, node, bool:cont, bool:tp, bool:loop);
-forward OnCameraReachNode(playerid, camera, node);
+
+forward MoveCameraToNextNode(playerid, bool:tp, bool:freeze, bool:loop);
+forward internal_OnCamMove(playerid, bool:tp, bool:freeze, bool:loop);
 forward UpdateFreeCam(playerid);
 
-stock LoadCameraMover(filename[])
+forward OnCameraLeaveNode(playerid, cameraid, currnode);
+forward OnCameraLeftNode(playerid, cameraid, currnode);
+forward OnCameraReachNode(playerid, cameraid, node);
+forward OnCameraReachedNode(playerid, cameraid, node);
+forward OnCameraSequenceFinish(playerid, cameraid);
+
+
+/*==============================================================================
+
+	Core Functions
+
+==============================================================================*/
+
+
+/*
+	Todo:
+	CreateCameraSequencer
+	CreateEmptyCameraSequencer
+	Separate file loaded cameras from hardcoded
+*/
+stock LoadCameraSequencer(name[])
 {
-	new id;
-	while(camIdUsed[id] && id<=MAX_CAMERAS)id++;
-	if(id == MAX_CAMERAS)return print("ERROR: Camera ID limit reached");
+	camseq_debug("[LoadCameraSequencer] Loading '%s'", name);
 
-	#define TMP_LOAD        (0) // The cell that SSCANF loads into
-	#define TMP_KEEP        (1) // The cell that carries over to the next loop itteration
-	#define TMP_DATA_COUNT  (3) // Number of cells in 'tmpData'
+	new id = Iter_Free(cam_Index);
 
-
-	format(camFilename[id], MAX_CAMFILE_LEN, "Cameras/%s.cam", filename);
-	if(!fexist(camFilename[id]))
+	if(id == -1)
 	{
-//      printf("ERROR: Camera data file '%s' not found", camFilename[id]);
+		printf("[LoadCameraSequencer] ERROR: Camera ID limit reached while loading '%s'.", name);
+		return -1;
+	}
+
+	new filename[128];
+
+	format(filename, MAX_CAMERA_FILENAME, CAMERA_FILE, name);
+
+	if(!fexist(filename))
+	{
+		printf("[LoadCameraSequencer] ERROR: Camera data file '%s' not found.", filename);
 		return -1;
 	}
 
 	new
-		File:camFile,
+		File:file,
 		line[128],
 		idx,
-		tmpData[2][TMP_DATA_COUNT]; // optional data: cam_moveTime, cam_waitTime, cam_moveType
+		defaults[3];
 
 	// Default values in case no values are defined in the file
-	tmpData[1][0] = 3000;
-	tmpData[1][1] = 0;
-	tmpData[1][2] = CAMERA_MOVE;
+	defaults[0] = DEFAULT_MOVETIME;
+	defaults[1] = DEFAULT_WAITTIME;
+	defaults[2] = DEFAULT_MOVETYPE;
 
-	camFile = fopen(camFilename[id], io_read);
+	file = fopen(filename, io_read);
 
-	while(fread(camFile, line, 128))
+	while(fread(file, line))
 	{
-		if (idx == MAX_CAMNODE)
+		if(idx == MAX_CAMNODE)
 		{
-			print("ERROR: Camera node limit reached");
+			printf("[LoadCameraSequencer] ERROR: Camera node limit reached in '%s'", name);
 			break;
 		}
-		if (!sscanf(line, "p<,>ffffffD(-1)D(-1)D(-1)", // Too much for one line
-			camData[id][idx][cam_cPosX], camData[id][idx][cam_cPosY], camData[id][idx][cam_cPosZ],
-			camData[id][idx][cam_lPosX], camData[id][idx][cam_lPosY], camData[id][idx][cam_lPosZ],
-			tmpData[TMP_LOAD][0], tmpData[TMP_LOAD][1], tmpData[TMP_LOAD][2] ))
+
+		if (!sscanf(line, "p<,>ffffffD(-1)D(-1)D(-1)",
+			cam_NodeData[id][idx][cam_posX], cam_NodeData[id][idx][cam_posY], cam_NodeData[id][idx][cam_posZ],
+			cam_NodeData[id][idx][cam_tarX], cam_NodeData[id][idx][cam_tarY], cam_NodeData[id][idx][cam_tarZ],
+			cam_NodeData[id][idx][cam_moveTime], cam_NodeData[id][idx][cam_waitTime], cam_NodeData[id][idx][cam_moveType]))
 		{
-			for(new c;c<TMP_DATA_COUNT;c++) // c = cell reference
-			{
-				if (tmpData[TMP_LOAD][c] == -1) tmpData[TMP_LOAD][c] = tmpData[TMP_KEEP][c]; // If it an optional param has -1 set it's detault value
-				else tmpData[TMP_KEEP][c] = tmpData[TMP_LOAD][c]; // Otherwise set the default value to the value just read
-				// This method means that you can define timings for a set of coordinates
-				// simply by defining the top one as what you want and leaving the rest blank
-				// These settings will be default until the next line is found with optional params
-			}
-			camData[id][idx][cam_moveTime] = tmpData[TMP_LOAD][0]; // Set the values to the global array cell of this camera
-			camData[id][idx][cam_waitTime] = tmpData[TMP_LOAD][1];
-			camData[id][idx][cam_moveType] = tmpData[TMP_LOAD][2];
+			// If -1, use defaults
+			// Also, assign defaults inline
+			defaults[0] = cam_NodeData[id][idx][cam_moveTime] = cam_NodeData[id][idx][cam_moveTime] == -1 ? (defaults[0]) : (cam_NodeData[id][idx][cam_moveTime]);
+			defaults[1] = cam_NodeData[id][idx][cam_waitTime] = cam_NodeData[id][idx][cam_waitTime] == -1 ? (defaults[1]) : (cam_NodeData[id][idx][cam_waitTime]);
+			defaults[2] = cam_NodeData[id][idx][cam_moveType] = cam_NodeData[id][idx][cam_moveType] == -1 ? (defaults[2]) : (cam_NodeData[id][idx][cam_moveType]);
+
+			camseq_debug("[LoadCameraSequencer] Loaded node %d: %.1f, %.1f, %.1f, %.1f, %.1f, %.1f, %d, %d, %d", idx, cam_NodeData[id][idx][cam_posX], cam_NodeData[id][idx][cam_posY], cam_NodeData[id][idx][cam_posZ], cam_NodeData[id][idx][cam_tarX], cam_NodeData[id][idx][cam_tarY], cam_NodeData[id][idx][cam_tarZ], cam_NodeData[id][idx][cam_moveTime], cam_NodeData[id][idx][cam_waitTime], cam_NodeData[id][idx][cam_moveType]);
+
+			idx++;
 		}
-		idx++;
 	}
-	camMaxNodes[id] = idx - 1;
-	camIdUsed[id] = true;
-	fclose(camFile);
+
+	if(idx == 0)
+	{
+		printf("[LoadCameraSequencer] ERROR: Data file for camera '%s' contains no node data.", name);
+		return INVALID_CAMERA_SEQUENCER_ID;
+	}
+
+	cam_Data[id][cam_totalNodes] = idx;
+
+	camseq_debug("[LoadCameraSequencer] Loaded camera sequencer '%s' with %d nodes.", name, idx);
+
+	fclose(file);
+
+	Iter_Add(cam_Index, id);
+
 	return id;
 }
-stock ClearCameraID(id)
+
+stock DestroyCameraSequencer(cameraid)
 {
-	if(!(0 <= id < MAX_CAMERAS))return -1;
-	if(!camIdUsed[id])return 0;
+	if(!Iter_Contains(cam_Index, cameraid))
+		return 0;
 
-	for(new n; n <= camMaxNodes[id]; n++)
-		for(new e; e < 9; e++)
-			camData[id][n][CAM_DATA_ENUM:e]=0;
+	camseq_debug("[DestroyCameraSequencer] Destroying camera sequencer %d.", cameraid);
 
-	camNodeTimer[id]    = -1;
-	camMaxNodes [id]    = 0;
-	camIdUsed   [id]    = false;
-	camPaused   [id]    = false;
-	camMoving   [id]    = false;
-	camPausePos [id][0] = 0.0;
-	camPausePos [id][1] = 0.0;
-	camPausePos [id][2] = 0.0;
-	camPausePos [id][3] = 0.0;
-	camPausePos [id][4] = 0.0;
-	camPausePos [id][5] = 0.0;
-	
+	KillTimer(cam_NodeTimer[cameraid]);
+
+	cam_Data[cameraid][cam_totalNodes] = 0;
+	cam_Data[cameraid][cam_isPaused] = false;
+	cam_Data[cameraid][cam_isMoving] = false;
+
+	cam_PausePos[cameraid][0] = 0.0;
+	cam_PausePos[cameraid][1] = 0.0;
+	cam_PausePos[cameraid][2] = 0.0;
+	cam_PausePos[cameraid][3] = 0.0;
+	cam_PausePos[cameraid][4] = 0.0;
+	cam_PausePos[cameraid][5] = 0.0;
+
+	for(new i; i <= cam_totalNodes[cameraid]; i++)
+	{
+		cam_NodeData[cameraid][i][cam_posX] = 0.0;
+		cam_NodeData[cameraid][i][cam_posY] = 0.0;
+		cam_NodeData[cameraid][i][cam_posZ] = 0.0;
+		cam_NodeData[cameraid][i][cam_tarX] = 0.0;
+		cam_NodeData[cameraid][i][cam_tarY] = 0.0;
+		cam_NodeData[cameraid][i][cam_tarZ] = 0.0;
+		cam_NodeData[cameraid][i][cam_moveTime] = 0;
+		cam_NodeData[cameraid][i][cam_waitTime] = 0;
+		cam_NodeData[cameraid][i][cam_moveType] = 0;
+	}
+
+	Iter_Remove(cam_Index, cameraid);
+
 	return 0;
 }
 
-stock IsValidCameraHandle(camera)
+stock PlayCameraSequenceForPlayer(playerid, cameraid, startnode = 0, bool:tp = true, bool:freeze = true, bool:loop = false)
 {
-	if(!(0 <= camera < MAX_CAMERAS))return 0;
-	if(!camIdUsed[camera])return 0;
-	return 1;
-}
+	if(!Iter_Contains(cam_Index, cameraid))
+		return 0;
 
-stock PlayCameraMover(playerid, camera, startnode=0, bool:tp = true, bool:loop = false)
-{
-	if(!(0 <= camera < MAX_CAMERAS))return -1;
-	if(!camIdUsed[camera])return 0;
+	camseq_debug("[PlayCameraSequenceForPlayer] playerid: %d cameraid: %d starting at: %d tp: %d freeze: %d loop: %d", playerid, cameraid, startnode, tp, freeze, loop);
 
-	gPlayerCamData[playerid][p_Node] = startnode;
-	gPlayerCamData[playerid][p_CamID] = camera;
+	cam_PlayerCurrentCamera[playerid] = cameraid;
+	cam_Data[cameraid][cam_currentNode] = startnode;
 
-	TogglePlayerControllable(playerid, false);
-	MoveCameraToNextNode(playerid, false, tp, loop);
-	
-	return 1;
-}
-stock PauseCameraMover(playerid)
-{
-	new
-		tmpCam = gPlayerCamData[playerid][p_CamID],
-		Float:vX,
-		Float:vY,
-		Float:vZ;
-
-	GetPlayerCameraPos(playerid, camPausePos[tmpCam][0], camPausePos[tmpCam][1], camPausePos[tmpCam][2]);
-	GetPlayerCameraFrontVector(playerid, vX, vY, vZ);
-
-	camPausePos[tmpCam][3]=camPausePos[tmpCam][0]+vX;
-	camPausePos[tmpCam][4]=camPausePos[tmpCam][1]+vZ;
-	camPausePos[tmpCam][5]=camPausePos[tmpCam][2]+vZ;
-
-	SetPlayerCameraPos(playerid, camPausePos[tmpCam][0], camPausePos[tmpCam][1], camPausePos[tmpCam][2]);
-	SetPlayerCameraLookAt(playerid, camPausePos[tmpCam][3], camPausePos[tmpCam][4], camPausePos[tmpCam][5]);
-
-	if(camNodeTimer[tmpCam]!=-1)KillTimer(camNodeTimer[tmpCam]);
-	camPaused[tmpCam]=true;
-}
-
-public MoveCameraToNextNode(playerid, bool:editing, bool:tp, bool:loop)
-{
-	new
-		tmpCam = gPlayerCamData[playerid][p_CamID],
-		tmpNode = gPlayerCamData[playerid][p_Node],
-		nextNode = tmpNode+1;
-
-	if(nextNode > camMaxNodes[tmpCam]) // Player has reached the last node
-	{
-		if(loop)nextNode = 0;
-		else return 1;
-	}
-
-	if(camPaused[tmpCam]) // Move the camera from the paused position
-	{
-		InterpolateCameraPos(playerid,
-			camPausePos[tmpCam][0], camPausePos[tmpCam][1], camPausePos[tmpCam][2],
-			camData[tmpCam][nextNode][cam_cPosX], camData[tmpCam][nextNode][cam_cPosY], camData[tmpCam][nextNode][cam_cPosZ],
-			camData[tmpCam][tmpNode][cam_moveTime], camData[tmpCam][tmpNode][cam_moveType]);
-
-		InterpolateCameraLookAt(playerid,
-			camPausePos[tmpCam][3], camPausePos[tmpCam][4], camPausePos[tmpCam][5],
-			camData[tmpCam][nextNode][cam_lPosX], camData[tmpCam][nextNode][cam_lPosY], camData[tmpCam][nextNode][cam_lPosZ],
-			camData[tmpCam][tmpNode][cam_moveTime], camData[tmpCam][tmpNode][cam_moveType]);
-
-		camPausePos[tmpCam][0]=0.0;
-		camPausePos[tmpCam][1]=0.0;
-		camPausePos[tmpCam][2]=0.0;
-		camPausePos[tmpCam][3]=0.0;
-		camPausePos[tmpCam][4]=0.0;
-		camPausePos[tmpCam][5]=0.0;
-
-		camPaused[tmpCam] = false;
-	}
-	else // Move the camera from the node
-	{
-		InterpolateCameraPos(playerid,
-			camData[tmpCam][tmpNode][cam_cPosX], camData[tmpCam][tmpNode][cam_cPosY], camData[tmpCam][tmpNode][cam_cPosZ],
-			camData[tmpCam][nextNode][cam_cPosX], camData[tmpCam][nextNode][cam_cPosY], camData[tmpCam][nextNode][cam_cPosZ],
-			camData[tmpCam][tmpNode][cam_moveTime], camData[tmpCam][tmpNode][cam_moveType]);
-
-		InterpolateCameraLookAt(playerid,
-			camData[tmpCam][tmpNode][cam_lPosX], camData[tmpCam][tmpNode][cam_lPosY], camData[tmpCam][tmpNode][cam_lPosZ],
-			camData[tmpCam][nextNode][cam_lPosX], camData[tmpCam][nextNode][cam_lPosY], camData[tmpCam][nextNode][cam_lPosZ],
-			camData[tmpCam][tmpNode][cam_moveTime], camData[tmpCam][tmpNode][cam_moveType]);
-	}
-	TogglePlayerControllable(playerid, false);
-	if(tp)SetPlayerPos(playerid, camData[tmpCam][nextNode][cam_lPosX], camData[tmpCam][nextNode][cam_lPosY], camData[tmpCam][nextNode][cam_lPosZ]-50.0);
-
-	CallLocalFunction("OnCameraLeaveNode", "ddd", playerid, tmpCam, tmpNode);
-	if(!editing)camNodeTimer[tmpCam] = SetTimerEx("internal_OnCamMove", camData[tmpCam][tmpNode][cam_moveTime], false, "ddddd", playerid, nextNode, true, tp, loop);
-	else camNodeTimer[tmpCam] = SetTimerEx("editor_OnCamMove", camData[tmpCam][tmpNode][cam_moveTime], false, "ddd", playerid, nextNode, false);
-	return 1;
-}
-
-public internal_OnCamMove(playerid, node, bool:cont, bool:tp, bool:loop)
-{
-	new
-		tmpCam = gPlayerCamData[playerid][p_CamID],
-		externResult;
-
-	externResult = CallLocalFunction("OnCameraReachNode", "ddd", playerid, tmpCam, node);
-
-	if(gPlayerCamData[playerid][p_Node] < camMaxNodes[tmpCam]) gPlayerCamData[playerid][p_Node]++;
-	else gPlayerCamData[playerid][p_Node] = 0;
-
-	if(externResult) cont = false;
-
-	if(cont && node <= camMaxNodes[tmpCam])
-	{
-		if(camData[tmpCam][node][cam_waitTime] > 0)
-		{
-			camNodeTimer[tmpCam] = SetTimerEx(
-				"MoveCameraToNextNode", camData[tmpCam][node][cam_moveTime], false,
-				"dddd", playerid, false, tp, loop);
-		}
-		else MoveCameraToNextNode(playerid, false, tp, loop);
-	}
-
-	return 1;
-}
-
-stock ExitCamera(playerid)
-{
-	new
-		tmpCam = gPlayerCamData[playerid][p_CamID];
-
-	if(tmpCam == -1)return -1;
-	if(!camIdUsed[tmpCam])return 0;
-
-	if(camNodeTimer[tmpCam]!=-1)KillTimer(camNodeTimer[tmpCam]);
-	SetCameraBehindPlayer(playerid);
-	TogglePlayerControllable(playerid, false);
-
-	gPlayerCamData[playerid][p_Node] = -1;
-	gPlayerCamData[playerid][p_CamID] = -1;
+	MoveCameraToNextNode(playerid, tp, freeze, loop);
 	
 	return 1;
 }
 
+stock ExitPlayerCameraSequencer(playerid, returncamera = true, unfreeze = true)
+{
+	if(!Iter_Contains(cam_Index, cam_PlayerCurrentCamera[playerid]))
+		return 0;
 
-// Returning data to be used externally,
-// Perhaps for timed animation sequences or cutscenes.
-/*
-	cam_moveTime,           // Time in MS to move between each node
-	cam_waitTime,           // Time in MS to wait before moving
-	cam_moveType            // Camera move type (Cut or Move)
-*/
+	camseq_debug("[ExitPlayerCameraSequencer] playerid: %d returncamera: %d unfreeze: %d", playerid, returncamera, unfreeze);
+
+	KillTimer(cam_NodeTimer[cam_PlayerCurrentCamera[playerid]);
+
+	if(returncamera)
+		SetCameraBehindPlayer(playerid);
+
+	if(unfreeze)
+		TogglePlayerControllable(playerid, true);
+
+	cam_PlayerCurrentCamera[playerid] = INVALID_CAMERA_SEQUENCER_ID;
+	
+	return 1;
+}
+
+stock PausePlayerCameraSequence(playerid)
+{
+	if(!Iter_Contains(cam_Index, cam_PlayerCurrentCamera[playerid]))
+		return 0;
+
+	new
+		cameraid = cam_PlayerCurrentCamera[playerid],
+		Float:vecx,
+		Float:vecy,
+		Float:vecz;
+
+	camseq_debug("[PausePlayerCameraSequence] playerid: %d cameraid: %d current node: %d", playerid, cameraid, cam_Data[cameraid][cam_currentNode]);
+
+	GetPlayerCameraPos(playerid, cam_PausePos[cameraid][0], cam_PausePos[cameraid][1], cam_PausePos[cameraid][2]);
+	GetPlayerCameraFrontVector(playerid, vecx, vecy, vecz);
+
+	cam_PausePos[cameraid][3] = cam_PausePos[cameraid][0] + vecx;
+	cam_PausePos[cameraid][4] = cam_PausePos[cameraid][1] + vecy;
+	cam_PausePos[cameraid][5] = cam_PausePos[cameraid][2] + vecz;
+
+	SetPlayerCameraPos(playerid, cam_PausePos[cameraid][0], cam_PausePos[cameraid][1], cam_PausePos[cameraid][2]);
+	SetPlayerCameraLookAt(playerid, cam_PausePos[cameraid][3], cam_PausePos[cameraid][4], cam_PausePos[cameraid][5]);
+
+	KillTimer(cam_NodeTimer[cameraid]);
+	cam_Data[cameraid][cam_isPaused] = true;
+
+	return 1;
+}
 
 
-stock GetCameraNodeMoveTime(camera, node)
-	return camData[camera][node][cam_moveTime];
+/*==============================================================================
 
-stock GetCameraNodeWaitTime(camera, node)
-	return camData[camera][node][cam_waitTime];
+	Internal Functions and Hooks
 
-stock GetCameraNodeMoveType(camera, node)
-	return camData[camera][node][cam_moveType];
+==============================================================================*/
 
 
-stock SetCameraNodeMoveTime(camera, node, time)
-	camData[camera][node][cam_moveTime] = time;
+public MoveCameraToNextNode(playerid, bool:tp, bool:freeze, bool:loop)
+{
+	new
+		cameraid,
+		currnode,
+		nextnode;
 
-stock SetCameraNodeWaitTime(camera, node, time)
-	camData[camera][node][cam_waitTime] = time;
+	cameraid = cam_PlayerCurrentCamera[playerid],
+	currnode = cam_Data[cameraid][cam_currentNode],
+	nextnode = currnode + 1;
 
-stock SetCameraNodeMoveType(camera, node, type)
-	camData[camera][node][cam_moveType] = type;
+	if(nextnode >= cam_Data[cameraid][cam_totalNodes])
+	{
+		camseq_debug("[MoveCameraToNextNode] Last node reached (%d), looping: %d", nextnode, loop);
+
+		if(loop)
+			nextnode = 0;
+
+		else
+			return 1;
+	}
+
+	camseq_debug("[MoveCameraToNextNode] playerid: %d cameraid: %d current node: %d next node: %d", playerid, cameraid, currnode, nextnode);
+
+	if(CallLocalFunction("OnCameraLeaveNode", "ddd", playerid, cameraid, currnode))
+		return 1;
+
+	if(cam_Data[cameraid][cam_isPaused])
+	{
+		camseq_debug("[MoveCameraToNextNode] Camera was paused, moving from paused position %.1f, %.1f, %.1f", cam_PausePos[cameraid][3], cam_PausePos[cameraid][4], cam_PausePos[cameraid][5]);
+
+		InterpolateCameraPos(playerid,
+			cam_PausePos[cameraid][0], cam_PausePos[cameraid][1], cam_PausePos[cameraid][2],
+			cam_NodeData[cameraid][nextnode][cam_posX], cam_NodeData[cameraid][nextnode][cam_posY], cam_NodeData[cameraid][nextnode][cam_posZ],
+			cam_NodeData[cameraid][currnode][cam_moveTime], cam_NodeData[cameraid][currnode][cam_moveType]);
+
+		InterpolateCameraLookAt(playerid,
+			cam_PausePos[cameraid][3], cam_PausePos[cameraid][4], cam_PausePos[cameraid][5],
+			cam_NodeData[cameraid][nextnode][cam_tarX], cam_NodeData[cameraid][nextnode][cam_tarY], cam_NodeData[cameraid][nextnode][cam_tarZ],
+			cam_NodeData[cameraid][currnode][cam_moveTime], cam_NodeData[cameraid][currnode][cam_moveType]);
+
+		cam_Data[cameraid][cam_isPaused] = false;
+	}
+	else
+	{
+		InterpolateCameraPos(playerid,
+			cam_NodeData[cameraid][currnode][cam_posX], cam_NodeData[cameraid][currnode][cam_posY], cam_NodeData[cameraid][currnode][cam_posZ],
+			cam_NodeData[cameraid][nextnode][cam_posX], cam_NodeData[cameraid][nextnode][cam_posY], cam_NodeData[cameraid][nextnode][cam_posZ],
+			cam_NodeData[cameraid][currnode][cam_moveTime], cam_NodeData[cameraid][currnode][cam_moveType]);
+
+		InterpolateCameraLookAt(playerid,
+			cam_NodeData[cameraid][currnode][cam_tarX], cam_NodeData[cameraid][currnode][cam_tarY], cam_NodeData[cameraid][currnode][cam_tarZ],
+			cam_NodeData[cameraid][nextnode][cam_tarX], cam_NodeData[cameraid][nextnode][cam_tarY], cam_NodeData[cameraid][nextnode][cam_tarZ],
+			cam_NodeData[cameraid][currnode][cam_moveTime], cam_NodeData[cameraid][currnode][cam_moveType]);
+	}
+
+	if(tp)
+		SetPlayerPos(playerid, cam_NodeData[cameraid][nextnode][cam_tarX], cam_NodeData[cameraid][nextnode][cam_tarY], cam_NodeData[cameraid][nextnode][cam_tarZ] - 50.0);
+
+	if(freeze)
+		TogglePlayerControllable(playerid, false);
+
+	cam_NodeTimer[cameraid] = SetTimerEx("internal_OnCamMove", cam_NodeData[cameraid][currnode][cam_moveTime], false, "ddddd", playerid, tp, freeze, loop);
+
+	if(CallLocalFunction("OnCameraLeftNode", "ddd", playerid, cameraid, currnode))
+		return 1;
+
+	return 1;
+}
+
+public internal_OnCamMove(playerid, bool:tp, bool:freeze, bool:loop)
+{
+	new cameraid = cam_PlayerCurrentCamera[playerid];
+
+	cam_Data[cameraid][cam_currentNode]++;
+
+	if(cam_Data[cameraid][cam_currentNode] >= cam_Data[cameraid][cam_totalNodes])
+		cam_Data[cameraid][cam_currentNode] = 0;
+
+	if(CallLocalFunction("OnCameraReachNode", "ddd", playerid, cameraid, cam_Data[cameraid][cam_currentNode]))
+		return;
+
+	camseq_debug("[internal_OnCamMove] Camera reached node %d, waiting here for %dms", cam_Data[cameraid][cam_currentNode], cam_NodeData[cameraid][cam_Data[cameraid][cam_currentNode]][cam_waitTime]);
+
+	if(cam_Data[cameraid][cam_currentNode] < cam_Data[cameraid][cam_totalNodes] && !loop)
+	{
+		if(cam_NodeData[cameraid][cam_Data[cameraid][cam_currentNode]][cam_waitTime] > 0)
+			cam_NodeTimer[cameraid] = SetTimerEx("MoveCameraToNextNode", cam_NodeData[cameraid][cam_Data[cameraid][cam_currentNode]][cam_waitTime], false, "dddd", playerid, tp, freeze, loop);
+
+		else
+			MoveCameraToNextNode(playerid, tp, freeze, loop);
+
+		CallLocalFunction("OnCameraReachedNode", "ddd", playerid, cameraid, cam_Data[cameraid][cam_currentNode]);
+		
+		return;
+	}
+
+	CallLocalFunction("OnCameraReachedNode", "ddd", playerid, cameraid, cam_Data[cameraid][cam_currentNode]);
+	CallLocalFunction("OnCameraSequenceFinish", "ddd", playerid, cameraid);
+
+	return;
+}
 
 
-stock GetCameraMaxNodes(camera)
-	return camMaxNodes[camera];
+/*==============================================================================
 
-stock GetPlayerCameraID(playerid)
-	return gPlayerCamData[playerid][p_CamID];
+	Interface Functions
 
-stock GetPlayerCurrentNode(playerid)
-	return gPlayerCamData[playerid][p_Node];
+==============================================================================*/
 
 
-stock IsCameraValid(camera)
-	return camIdUsed[p_CamID];
+stock IsValidCameraSequencer(cameraid)
+{
+	if(!Iter_Contains(cam_Index, cameraid))
+		return 0;
 
-stock IsCameraPaused(camera)
-	return camPaused[p_CamID];
+	return 1;
+}
 
-stock IsCameraMoving(camera)
-	return camMoving[p_CamID];
+// cam_totalNodes
+stock GetCameraTotalNodes(cameraid)
+{
+	if(!Iter_Contains(cam_Index, cameraid))
+		return 0;
+
+	return cam_Data[cameraid][cam_totalNodes];
+}
+
+// cam_isPaused
+stock IsCameraPaused(cameraid)
+{
+	if(!Iter_Contains(cam_Index, cameraid))
+		return 0;
+
+	return cam_Data[cameraid][cam_isPaused];
+}
+
+// cam_currentNode
+stock GetCameraCurrentNode(cameraid)
+{
+	if(!Iter_Contains(cam_Index, cameraid))
+		return 0;
+
+	return cam_Data[cameraid][cam_currentNode];
+}
+
+// cam_isMoving
+stock IsCameraMoving(cameraid)
+{
+	if(!Iter_Contains(cam_Index, cameraid))
+		return 0;
+
+	return cam_Data[cameraid][cam_isMoving];
+}
+
+
+// cam_posX
+// cam_posY
+// cam_posZ
+// cam_tarX
+// cam_tarY
+// cam_tarZ
+// cam_moveTime
+// cam_waitTime
+// cam_moveType
+
+// cam_PausePos
+// cam_PlayerCurrentCamera
+stock GetPlayerCameraSequencer(playerid)
+{
+	if(!IsPlayerConnected(playerid))
+		return INVALID_CAMERA_SEQUENCER_ID;
+
+	return cam_PlayerCurrentCamera[playerid];
+}
