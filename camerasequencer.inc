@@ -184,18 +184,7 @@ stock DestroyCameraSequencer(cameraid)
 
 	KillTimer(cam_NodeTimer[cameraid]);
 
-	cam_Data[cameraid][cam_totalNodes] = 0;
-	cam_Data[cameraid][cam_isPaused] = false;
-	cam_Data[cameraid][cam_isMoving] = false;
-
-	cam_PausePos[cameraid][0] = 0.0;
-	cam_PausePos[cameraid][1] = 0.0;
-	cam_PausePos[cameraid][2] = 0.0;
-	cam_PausePos[cameraid][3] = 0.0;
-	cam_PausePos[cameraid][4] = 0.0;
-	cam_PausePos[cameraid][5] = 0.0;
-
-	for(new i; i <= cam_totalNodes[cameraid]; i++)
+	for(new i; i <= cam_Data[cameraid][cam_totalNodes]; i++)
 	{
 		cam_NodeData[cameraid][i][cam_posX] = 0.0;
 		cam_NodeData[cameraid][i][cam_posY] = 0.0;
@@ -207,6 +196,17 @@ stock DestroyCameraSequencer(cameraid)
 		cam_NodeData[cameraid][i][cam_waitTime] = 0;
 		cam_NodeData[cameraid][i][cam_moveType] = 0;
 	}
+
+	cam_Data[cameraid][cam_totalNodes] = 0;
+	cam_Data[cameraid][cam_isPaused] = false;
+	cam_Data[cameraid][cam_isMoving] = false;
+
+	cam_PausePos[cameraid][0] = 0.0;
+	cam_PausePos[cameraid][1] = 0.0;
+	cam_PausePos[cameraid][2] = 0.0;
+	cam_PausePos[cameraid][3] = 0.0;
+	cam_PausePos[cameraid][4] = 0.0;
+	cam_PausePos[cameraid][5] = 0.0;
 
 	Iter_Remove(cam_Index, cameraid);
 
@@ -235,7 +235,7 @@ stock ExitPlayerCameraSequencer(playerid, returncamera = true, unfreeze = true)
 
 	camseq_debug("[ExitPlayerCameraSequencer] playerid: %d returncamera: %d unfreeze: %d", playerid, returncamera, unfreeze);
 
-	KillTimer(cam_NodeTimer[cam_PlayerCurrentCamera[playerid]);
+	KillTimer(cam_NodeTimer[cam_PlayerCurrentCamera[playerid]]);
 
 	if(returncamera)
 		SetCameraBehindPlayer(playerid);
