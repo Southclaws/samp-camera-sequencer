@@ -14,7 +14,8 @@
 
 #include <a_samp>
 #include <sscanf2>
-#include <CameraMover>
+
+#include "camera-sequencer.inc"
 
 #define INDEX_FILE      "Cameras/index.txt"
 #define strcpy(%0,%1)   strcat((%0[0] = '\0', %0), %1)
@@ -31,7 +32,7 @@ new
 	freeCamUsed[MAX_PLAYERS],
 	freeCamObj[MAX_PLAYERS],
 
-	indexData[MAX_CAMERAS][MAX_CAMFILE_LEN];
+	indexData[MAX_CAMERAS][MAX_CAMERA_FILENAME];
 
 forward editor_OnCamMove(playerid, node, bool:cont);
 
@@ -87,7 +88,7 @@ stock FormatMainMenu(playerid)
 		line[64],
 		idx,
 		strTitle[32],
-		strList[MAX_CAMERAS*(MAX_CAMFILE_LEN+1)];
+		strList[MAX_CAMERAS*(MAX_CAMERA_FILENAME+1)];
 
 	strList = "New Camera...\n";
 
@@ -119,7 +120,7 @@ CreateCameraMover(playerid, camname[])
 	new
 		File:idxFile,
 		File:camFile,
-		tmpStr[MAX_CAMFILE_LEN+2],
+		tmpStr[MAX_CAMERA_FILENAME+2],
 		newData[128],
 		iLoop,
 
@@ -144,7 +145,7 @@ CreateCameraMover(playerid, camname[])
 	vecY+=camY;
 	vecZ+=camZ;
 
-	format(tmpStr, MAX_CAMFILE_LEN+2, CAMERA_FILE, camname);
+	format(tmpStr, MAX_CAMERA_FILENAME+2, CAMERA_FILE, camname);
 	camFile = fopen(tmpStr, io_write);
 
 	format(newData, 128, "%f, %f, %f, %f, %f, %f, %d, %d, %d", camX, camY, camZ, vecX, vecY, vecZ, DEFAULT_MOVETIME, DEFAULT_WAITTIME, DEFAULT_MOVETYPE);

@@ -1,0 +1,12 @@
+{
+    "user": "Southclaws",
+    "repo": "samp-camera-sequencer",
+    "entry": "camera-editor.pwn",
+    "output": "camera-editor.amx",
+    "dependencies": [
+        "Southclaws/samp-stdlib",
+        "Zeex/amx_assembly",
+        "Misiur/YSI-Includes",
+        "maddinat0r/sscanf"
+    ]
+}

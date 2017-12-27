@@ -1,15 +1,17 @@
-/*==============================================================================
-
-
-	Southclaw's Camera Sequencer
-		v3.0
-
-
-==============================================================================*/
-
+// built-in include guard removal
+// just in case the user has a local dependency with the same file name
+#if defined _inc_camera_sequencer
+	#undef _inc_camera_sequencer
+#endif
+// custom include-guard to ensure we don't duplicate
+#if defined _camera_sequencer_included
+	#endinput
+#endif
+#define _camera_sequencer_included
 
 #include <sscanf2>
 #include <YSI\y_iterate>
+
 
 #if !defined CAMSEQ_DEBUG
 	#define CAMSEQ_DEBUG (false)
@@ -63,15 +65,15 @@ Float:		cam_tarZ,
 }
 
 
-static
-			cam_Data[MAX_CAMERAS][E_CAM_DATA],
-			cam_NodeData[MAX_CAMERAS][MAX_CAMNODE][E_CAM_NODE_DATA],
-			cam_NodeTimer[MAX_CAMERAS],
-Float:		cam_PausePos[MAX_CAMERAS][6],
-			cam_PlayerCurrentCamera[MAX_PLAYERS];
+new
+	cam_Data[MAX_CAMERAS][E_CAM_DATA],
+	cam_NodeData[MAX_CAMERAS][MAX_CAMNODE][E_CAM_NODE_DATA],
+	cam_NodeTimer[MAX_CAMERAS],
+	Float:cam_PausePos[MAX_CAMERAS][6],
+	cam_PlayerCurrentCamera[MAX_PLAYERS];
 
 new
-Iterator:	cam_Index<MAX_CAMERAS>;
+	Iterator:cam_Index<MAX_CAMERAS>;
 
 
 forward MoveCameraToNextNode(playerid, bool:tp, bool:freeze, bool:loop);
