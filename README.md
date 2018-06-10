@@ -1,17 +1,26 @@
-# camera-sequencer
+# samp-camera-sequencer
 
-A library for creating camera sequences. A camera sequence is a set of camera nodes which contain shot data and when played for a player, their camera will move between the nodes.
+[![sampctl](https://shields.southcla.ws/badge/sampctl-samp--camera--sequencer-2f2f2f.svg?style=for-the-badge)](https://github.com/Southclaws/samp-camera-sequencer)
 
-Files are used to store the coordinates and sequence data. Each camera node consists of coordinates and timing information.
+A library for creating camera sequences. A camera sequence is a set of camera
+nodes which contain shot data and when played for a player, their camera will
+move between the nodes.
 
-There is an editor script however it does not compile - I somehow lost track of these two scripts over the years and the editor in this repository is miles behind the actual library version so there are a lot of mismatched function and variable names. I might rewrite/update it in the future but only if I specifically need it for something.
+Files are used to store the coordinates and sequence data. Each camera node
+consists of coordinates and timing information.
+
+There is an editor script however it does not compile - I somehow lost track of
+these two scripts over the years and the editor in this repository is miles
+behind the actual library version so there are a lot of mismatched function and
+variable names. I might rewrite/update it in the future but only if I
+specifically need it for something.
 
 ## Installation
 
 Simply install to your project:
 
 ```bash
-sampctl package install Southclaws/camera-sequencer
+sampctl package install Southclaws/samp-camera-sequencer
 ```
 
 Include in your code and begin using the library:
